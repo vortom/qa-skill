@@ -256,6 +256,17 @@ Dispatch each scenario to the right execution approach based on its `platform` t
 
 Record these as `report_add_fail` with severity tags even if they weren't in the test plan. **A test session with "all pass, zero issues" on a real product is a red flag** — it likely means observations were missed or suppressed.
 
+**This applies even in single-issue verification mode.** When navigating to a specific screen to verify a fix, you pass through many other screens along the way. The marginal cost of noting an anomaly is near zero — you're already looking at the screen. Don't tunnel-vision on the target bug.
+
+### State Navigation (reaching deep screens efficiently)
+
+Verifying a bug on a deeply nested screen (e.g., the 3rd topic's sorting question) can require many steps just to get there. Minimize navigation overhead:
+
+1. **Deep links / intents:** If the app supports deep links (e.g., `adb shell am start -d "app://screen/id"`), use them to jump directly to the target. Check project docs for available deep link schemas.
+2. **Chain aggressively:** When navigating through prerequisite screens, chain multiple actions in a single `eval` call. Skip screenshots and detailed verification until you reach the target screen.
+3. **Reuse cached state:** If the app caches data locally (e.g., Room database), a previously analyzed discovery may still be available — no need to re-analyze. Check the Journal/history before creating a new analysis.
+4. **Use the fastest correct answer:** For quiz questions you're just navigating through, pick the obviously correct answer without deliberating. Speed matters for navigation; accuracy matters for the target test.
+
 After all scenarios: `report_finish`
 
 ## Phase 4: REPORT
