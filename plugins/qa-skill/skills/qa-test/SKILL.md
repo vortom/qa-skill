@@ -229,6 +229,7 @@ Dispatch each scenario to the right execution approach based on its `platform` t
 - Actions: `browser_click(ref)`, `browser_type(ref, text)`, `browser_select_option(ref, values)`, `browser_press_key(key)`
 - Key rule: always re-snapshot after navigation or state changes — `ref` numbers are ephemeral
 - Error diagnosis: `browser_console_messages`, `browser_network_requests`
+- **Deployment verification:** When verifying a fix on a live site, CDN/browser caching can show stale content. Append a cache buster (`?v=timestamp`) to the URL to bypass caches. Compare `curl` output (no cache) with browser behavior to distinguish caching issues from real bugs.
 
 **Other platforms:** Read the project's testing documentation and use whatever tools are available (simulators, CLI utilities, MCP tools). Follow the same observe → act → verify pattern.
 
