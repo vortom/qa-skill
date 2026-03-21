@@ -14,7 +14,8 @@
 #   adb_screenshot, adb_get_screen_xml, adb_get_screen_size
 #
 # Compound functions (prefer these — each replaces 2-4 primitive calls):
-#   adb_tap_text TEXT [SLEEP]              — XML dump → find element → tap center
+#   adb_tap_text TEXT [SLEEP] [INDEX]      — XML dump → find element → tap center (falls back to content-desc)
+#   adb_tap_content_desc DESC [SLEEP] [INDEX] — XML dump → find by content-desc → tap center
 #   adb_wait_for_text TEXT [TIMEOUT]       — Poll XML until text appears
 #   adb_tap_and_wait TAP WAIT [TIMEOUT]    — Tap by text, wait for new text
 #   adb_assert_text TEXT                   — Check text exists on screen (0/1)
@@ -183,20 +184,26 @@ adb_screenshot() {
     fi
 }
 
-# Get UI hierarchy XML
+# Get UI hierarchy XML (with retry — uiautomator can fail during transitions)
 adb_get_screen_xml() {
     local output_file="$1"
     local temp_file="/sdcard/window_dump.xml"
-    adb shell uiautomator dump "$temp_file" >/dev/null 2>&1
-    adb pull "$temp_file" "$output_file" >/dev/null 2>&1
-    adb shell rm "$temp_file" 2>/dev/null
-    if [[ -f "$output_file" ]]; then
-        log_info "UI hierarchy saved: $output_file"
-        return 0
-    else
-        log_error "Failed to dump UI hierarchy"
-        return 1
-    fi
+    local attempt
+    for attempt in 1 2 3; do
+        adb shell uiautomator dump "$temp_file" >/dev/null 2>&1
+        adb pull "$temp_file" "$output_file" >/dev/null 2>&1
+        adb shell rm "$temp_file" 2>/dev/null
+        if [[ -f "$output_file" ]] && [[ -s "$output_file" ]]; then
+            log_info "UI hierarchy saved: $output_file"
+            return 0
+        fi
+        if [[ $attempt -lt 3 ]]; then
+            log_warn "XML dump attempt $attempt failed, retrying in 1s..."
+            sleep 1
+        fi
+    done
+    log_error "Failed to dump UI hierarchy after 3 attempts"
+    return 1
 }
 
 # Get screen resolution
@@ -226,25 +233,34 @@ adb_wait_for_app() {
 # Internal: temp file for XML dumps (avoids per-call path arguments)
 _ADB_XML_TMP="/tmp/qa-screen-dump.xml"
 
-# Internal: dump fresh UI hierarchy to temp file
+# Internal: dump fresh UI hierarchy to temp file (with retry)
 _adb_fresh_xml() {
     local temp_file="/sdcard/window_dump.xml"
-    adb shell uiautomator dump "$temp_file" >/dev/null 2>&1
-    adb pull "$temp_file" "$_ADB_XML_TMP" >/dev/null 2>&1
-    adb shell rm "$temp_file" 2>/dev/null
-    if [[ ! -f "$_ADB_XML_TMP" ]]; then
-        log_error "Failed to dump UI hierarchy"
-        return 1
-    fi
+    local attempt
+    for attempt in 1 2 3; do
+        adb shell uiautomator dump "$temp_file" >/dev/null 2>&1
+        adb pull "$temp_file" "$_ADB_XML_TMP" >/dev/null 2>&1
+        adb shell rm "$temp_file" 2>/dev/null
+        if [[ -f "$_ADB_XML_TMP" ]] && [[ -s "$_ADB_XML_TMP" ]]; then
+            return 0
+        fi
+        if [[ $attempt -lt 3 ]]; then
+            sleep 1
+        fi
+    done
+    log_error "Failed to dump UI hierarchy after 3 attempts"
+    return 1
 }
 
 # Internal: find element center coordinates by text match in XML file
-# Usage: _adb_parse_bounds "Button Text" [xml_file]
+# Usage: _adb_parse_bounds "Button Text" [xml_file] [index]
 # Output: prints "cx cy" to stdout (e.g., "540 1802")
+# index: 1-based match index (default 1 = first match)
 # Returns 1 if not found
 _adb_parse_bounds() {
     local search_text="$1"
     local xml_file="${2:-$_ADB_XML_TMP}"
+    local index="${3:-1}"
     if [[ ! -f "$xml_file" ]]; then
         log_error "XML file not found: $xml_file"
         return 1
@@ -254,13 +270,13 @@ _adb_parse_bounds() {
     local bounds
     bounds=$(sed 's/></>\n</g' "$xml_file" \
         | grep "text=\"${search_text}\"" \
-        | head -1 \
+        | sed -n "${index}p" \
         | sed 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/')
     if [[ -z "$bounds" ]]; then
         # Fallback: try content-desc match
         bounds=$(sed 's/></>\n</g' "$xml_file" \
             | grep "content-desc=\"${search_text}\"" \
-            | head -1 \
+            | sed -n "${index}p" \
             | sed 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/')
     fi
     if [[ -z "$bounds" || "$bounds" == *"bounds"* ]]; then
@@ -273,17 +289,60 @@ _adb_parse_bounds() {
     echo "$(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 ))"
 }
 
+# Internal: find element center coordinates by content-desc only
+# Usage: _adb_parse_bounds_desc "Journal" [xml_file] [index]
+_adb_parse_bounds_desc() {
+    local search_desc="$1"
+    local xml_file="${2:-$_ADB_XML_TMP}"
+    local index="${3:-1}"
+    if [[ ! -f "$xml_file" ]]; then
+        log_error "XML file not found: $xml_file"
+        return 1
+    fi
+    local bounds
+    bounds=$(sed 's/></>\n</g' "$xml_file" \
+        | grep "content-desc=\"${search_desc}\"" \
+        | sed -n "${index}p" \
+        | sed 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/')
+    if [[ -z "$bounds" || "$bounds" == *"bounds"* ]]; then
+        log_error "Element not found (content-desc): '$search_desc'"
+        return 1
+    fi
+    local x1 y1 x2 y2
+    read -r x1 y1 x2 y2 <<< "$bounds"
+    echo "$(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 ))"
+}
+
 # Tap an element found by its visible text (one call replaces XML dump + parse + tap)
-# Usage: adb_tap_text "Continue with Google" [sleep_after]
+# Falls back to content-desc if text not found.
+# Usage: adb_tap_text "Continue with Google" [sleep_after] [index]
+# index: 1-based match index for disambiguation (default 1 = first match)
 adb_tap_text() {
     local search_text="$1"
     local sleep_after="${2:-1}"
+    local index="${3:-1}"
     _adb_fresh_xml || return 1
     local coords
-    coords=$(_adb_parse_bounds "$search_text") || return 1
+    coords=$(_adb_parse_bounds "$search_text" "$_ADB_XML_TMP" "$index") || return 1
     local cx cy
     read -r cx cy <<< "$coords"
     log_info "Tap text '$search_text' at ($cx, $cy)"
+    adb shell input tap "$cx" "$cy"
+    sleep "$sleep_after"
+}
+
+# Tap an element found by its content-desc attribute (for elements without visible text)
+# Usage: adb_tap_content_desc "Journal" [sleep_after] [index]
+adb_tap_content_desc() {
+    local search_desc="$1"
+    local sleep_after="${2:-1}"
+    local index="${3:-1}"
+    _adb_fresh_xml || return 1
+    local coords
+    coords=$(_adb_parse_bounds_desc "$search_desc" "$_ADB_XML_TMP" "$index") || return 1
+    local cx cy
+    read -r cx cy <<< "$coords"
+    log_info "Tap content-desc '$search_desc' at ($cx, $cy)"
     adb shell input tap "$cx" "$cy"
     sleep "$sleep_after"
 }
