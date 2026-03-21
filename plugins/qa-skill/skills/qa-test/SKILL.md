@@ -23,9 +23,12 @@ Parse `$ARGUMENTS`:
 **CRITICAL — use absolute paths everywhere.** Relative paths break across tool calls because working directories can shift.
 
 ```bash
-SESSION_DIR="$(pwd)/tests/qa-sessions/$(date +%Y-%m-%dT%H-%M)"
+PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+SESSION_DIR="$PROJECT_DIR/tests/qa-sessions/$(date +%Y-%m-%dT%H-%M)"
 mkdir -p "$SESSION_DIR/screenshots"
 ```
+
+**Why `git rev-parse`?** `$(pwd)` can resolve to the wrong directory if context switches happened earlier in the conversation. `git rev-parse --show-toplevel` always returns the project root.
 
 **Platform detection** — scan project structure, CLAUDE.md, README, and docs to build a `PLATFORMS` list. Look for platform directories, build configs, and documented setup instructions. Common signals:
 
@@ -78,7 +81,7 @@ Write findings to `<session>/context.md`: project identity, detected platforms w
 
 **Per-platform setup:** Build, install/deploy, and verify each platform is ready for testing. For Android, this includes sourcing `adb.sh` and running `adb_install_app`. For Web, ensure the dev server is running. Follow whatever setup the project docs describe.
 
-**Session runner script (mandatory for Android):** Shell state does not persist between Bash tool calls, so sourcing scripts and exporting env vars every time is wasteful and generates repetitive permission prompts. After discovering platform details, create the runner and a **fixed-path symlink**.
+**Session runner script (mandatory for Android, recommended for all platforms):** Shell state does not persist between Bash tool calls, so sourcing scripts and exporting env vars every time is wasteful and generates repetitive permission prompts. After discovering platform details, create the runner and a **fixed-path symlink**. For web-only sessions, the runner only needs `report.sh` — skip Android vars and `adb.sh`.
 
 **All paths in the runner MUST be absolute** — never use relative paths.
 
@@ -88,17 +91,34 @@ Write findings to `<session>/context.md`: project identity, detected platforms w
 # CLAUDE_SKILL_DIR is substituted by Claude Code at runtime
 # It points to the skill's directory (e.g., /path/to/qa-skill/skills/qa-test)
 QA_PLUGIN_DIR="$(dirname "$(dirname "${CLAUDE_SKILL_DIR}")")"
+```
 
+**Android runner** (when Android platform detected):
+```bash
 cat > "$SESSION_DIR/qa.sh" << RUNNER
 #!/bin/bash
 set -euo pipefail
 export SESSION_DIR="$SESSION_DIR"
 export APP_PACKAGE="<discovered-package>"
 export APP_ACTIVITY="<discovered-activity>"
-export APK_PATH="$(pwd)/android/app/build/outputs/apk/debug/app-debug.apk"
+export APK_PATH="$PROJECT_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
 QA_PLUGIN_DIR="$QA_PLUGIN_DIR"
 source "\$QA_PLUGIN_DIR/scripts/report.sh"
 source "\$QA_PLUGIN_DIR/scripts/adb.sh"
+"\$@"
+RUNNER
+chmod +x "$SESSION_DIR/qa.sh"
+ln -sf "$SESSION_DIR/qa.sh" /tmp/qa
+```
+
+**Web-only runner** (when only Web platform detected — no Android vars or adb.sh):
+```bash
+cat > "$SESSION_DIR/qa.sh" << RUNNER
+#!/bin/bash
+set -euo pipefail
+export SESSION_DIR="$SESSION_DIR"
+QA_PLUGIN_DIR="$QA_PLUGIN_DIR"
+source "\$QA_PLUGIN_DIR/scripts/report.sh"
 "\$@"
 RUNNER
 chmod +x "$SESSION_DIR/qa.sh"
@@ -223,6 +243,18 @@ Dispatch each scenario to the right execution approach based on its `platform` t
 
 **Circuit breaker:** If 3 consecutive scenarios end in ERROR (crash/unrecoverable), abort remaining scenarios and proceed directly to Phase 4 with partial results.
 
+### Exploratory Observations
+
+**A good tester reports everything they observe, not just pass/fail on predefined steps.** During execution, actively watch for:
+
+- **UX inconsistencies** — broken layouts, unstyled pages, inconsistent behavior between similar components (e.g., header vs footer language switchers)
+- **Missing features** — no back navigation from error pages, dead-end states, missing loading indicators
+- **Content issues** — typos, untranslated strings, incorrect data, placeholder content left in production
+- **Accessibility gaps** — missing alt text, unlabeled buttons, poor contrast, keyboard traps
+- **Console errors** — JS exceptions, failed network requests, deprecation warnings
+
+Record these as `report_add_fail` with severity tags even if they weren't in the test plan. **A test session with "all pass, zero issues" on a real product is a red flag** — it likely means observations were missed or suppressed.
+
 After all scenarios: `report_finish`
 
 ## Phase 4: REPORT
@@ -232,7 +264,8 @@ Write `<session>/report.md`:
 1. **Summary table** — date, input source, duration, pass/fail/error counts, verdict
 2. **Per-scenario results** — table with step, action, platform, result, screenshot link
 3. **Failure analysis** per failed step — what happened, likely cause (using Phase 1 context), severity (blocker/major/minor/cosmetic), suggested fix
-4. **Environment info** — per platform: device/browser model, OS/browser version, screen/viewport size
+4. **Exploratory findings** — bugs, UX issues, or inconsistencies discovered outside the test plan. Each with severity, description, and evidence. These are separate from test case failures — they represent the tester's observational value beyond checklist execution.
+5. **Environment info** — per platform: device/browser model, OS/browser version, screen/viewport size
 
 **Verdict:**
 - All pass → PASS
