@@ -1,0 +1,358 @@
+#!/bin/bash
+# ADB wrapper functions for QA testing
+# Usage: source this file, then call functions
+#
+# Required environment variables (must be set by the caller):
+#   APP_PACKAGE   - Android application package name (e.g., "com.example.app")
+#   APP_ACTIVITY  - Main activity class name (e.g., "com.example.app.MainActivity")
+#
+# Optional environment variables:
+#   APK_PATH      - Path to the debug APK (default: "android/app/build/outputs/apk/debug/app-debug.apk")
+#
+# Primitive functions:
+#   adb_tap, adb_swipe, adb_input_text, adb_press_back, adb_press_home,
+#   adb_screenshot, adb_get_screen_xml, adb_get_screen_size
+#
+# Compound functions (prefer these — each replaces 2-4 primitive calls):
+#   adb_tap_text TEXT [SLEEP]              — XML dump → find element → tap center
+#   adb_wait_for_text TEXT [TIMEOUT]       — Poll XML until text appears
+#   adb_tap_and_wait TAP WAIT [TIMEOUT]    — Tap by text, wait for new text
+#   adb_assert_text TEXT                   — Check text exists on screen (0/1)
+#   adb_list_texts [XML]                   — List all visible text elements
+#   adb_screen_state SCREENSHOT [XML]      — Screenshot + XML dump in one call
+
+# Validate required environment variables
+if [[ -z "${APP_PACKAGE:-}" ]]; then
+    echo "ERROR: APP_PACKAGE environment variable is not set." >&2
+    echo "Set it to your Android application package name (e.g., export APP_PACKAGE='com.example.app')" >&2
+    return 1 2>/dev/null || exit 1
+fi
+
+if [[ -z "${APP_ACTIVITY:-}" ]]; then
+    echo "ERROR: APP_ACTIVITY environment variable is not set." >&2
+    echo "Set it to your main activity class (e.g., export APP_ACTIVITY='com.example.app.MainActivity')" >&2
+    return 1 2>/dev/null || exit 1
+fi
+
+# Configuration (derived from environment)
+readonly QA_APP_PACKAGE="$APP_PACKAGE"
+readonly QA_APP_ACTIVITY="$APP_ACTIVITY"
+readonly QA_APK_PATH="${APK_PATH:-android/app/build/outputs/apk/debug/app-debug.apk}"
+
+# Colors for output (guarded — may already be defined by report.sh)
+if [[ -z "${RED:-}" ]]; then readonly RED='\033[0;31m'; fi
+if [[ -z "${GREEN:-}" ]]; then readonly GREEN='\033[0;32m'; fi
+if [[ -z "${YELLOW:-}" ]]; then readonly YELLOW='\033[0;33m'; fi
+if [[ -z "${NC:-}" ]]; then readonly NC='\033[0m'; fi
+
+log_info() { echo -e "${GREEN}[ADB]${NC} $*"; }
+log_warn() { echo -e "${YELLOW}[ADB]${NC} $*"; }
+log_error() { echo -e "${RED}[ADB]${NC} $*" >&2; }
+
+# Check if a device/emulator is connected and ready
+adb_device_ready() {
+    local devices
+    devices=$(adb devices 2>/dev/null | grep -v "List" | grep -v "^$" | wc -l)
+    if [[ "$devices" -eq 0 ]]; then
+        log_error "No devices connected"
+        return 1
+    fi
+    if ! adb devices 2>/dev/null | grep -q "device$"; then
+        log_error "Device not ready (offline or unauthorized)"
+        return 1
+    fi
+    log_info "Device ready"
+    return 0
+}
+
+# Get the connected device/emulator serial
+adb_get_device() {
+    adb devices 2>/dev/null | grep "device$" | head -1 | cut -f1
+}
+
+# Install the debug APK
+adb_install_app() {
+    if [[ ! -f "$QA_APK_PATH" ]]; then
+        log_error "APK not found at: $QA_APK_PATH"
+        log_info "Build it first: cd android && ./gradlew assembleDebug"
+        return 1
+    fi
+    log_info "Installing APK: $QA_APK_PATH"
+    if adb install -r "$QA_APK_PATH" >/dev/null 2>&1; then
+        log_info "App installed successfully"
+        return 0
+    else
+        log_error "Failed to install APK"
+        return 1
+    fi
+}
+
+# Check if app is installed
+adb_app_installed() {
+    adb shell pm list packages 2>/dev/null | grep -q "$QA_APP_PACKAGE"
+}
+
+# Launch the app
+adb_launch_app() {
+    log_info "Launching app ($QA_APP_PACKAGE)"
+    adb shell am start -n "${QA_APP_PACKAGE}/${QA_APP_ACTIVITY}" >/dev/null 2>&1
+    sleep 2
+    log_info "App launched"
+}
+
+# Force stop the app
+adb_stop_app() {
+    log_info "Stopping app ($QA_APP_PACKAGE)"
+    adb shell am force-stop "$QA_APP_PACKAGE" >/dev/null 2>&1
+    log_info "App stopped"
+}
+
+# Clear app data
+adb_clear_app_data() {
+    log_info "Clearing app data ($QA_APP_PACKAGE)"
+    adb shell pm clear "$QA_APP_PACKAGE" >/dev/null 2>&1
+    log_info "App data cleared"
+}
+
+# Tap at screen coordinates
+adb_tap() {
+    local x="$1"
+    local y="$2"
+    log_info "Tap at ($x, $y)"
+    adb shell input tap "$x" "$y"
+    sleep 0.5
+}
+
+# Swipe gesture
+adb_swipe() {
+    local x1="$1"
+    local y1="$2"
+    local x2="$3"
+    local y2="$4"
+    local duration="${5:-300}"
+    log_info "Swipe from ($x1, $y1) to ($x2, $y2)"
+    adb shell input swipe "$x1" "$y1" "$x2" "$y2" "$duration"
+    sleep 0.5
+}
+
+# Input text
+adb_input_text() {
+    local text="$1"
+    local escaped_text="${text// /%s}"
+    log_info "Input text: $text"
+    adb shell input text "$escaped_text"
+}
+
+# Press back button
+adb_press_back() {
+    log_info "Press back"
+    adb shell input keyevent KEYCODE_BACK
+    sleep 0.3
+}
+
+# Press home button
+adb_press_home() {
+    log_info "Press home"
+    adb shell input keyevent KEYCODE_HOME
+    sleep 0.3
+}
+
+# Take a screenshot (resized to fit Claude Code's 2000px multi-image limit)
+adb_screenshot() {
+    local output_file="$1"
+    local max_dimension="${2:-1800}"
+    local output_dir
+    output_dir=$(dirname "$output_file")
+    mkdir -p "$output_dir"
+    local temp_file="/sdcard/screenshot_temp.png"
+    adb shell screencap -p "$temp_file" 2>/dev/null
+    adb pull "$temp_file" "$output_file" >/dev/null 2>&1
+    adb shell rm "$temp_file" 2>/dev/null
+    if [[ -f "$output_file" ]]; then
+        # Resize so longest side ≤ max_dimension (prevents Claude Code image limit errors)
+        if command -v sips &>/dev/null; then
+            sips --resampleHeightWidthMax "$max_dimension" "$output_file" >/dev/null 2>&1
+        elif command -v convert &>/dev/null; then
+            convert "$output_file" -resize "${max_dimension}x${max_dimension}>" "$output_file"
+        fi
+        log_info "Screenshot saved: $output_file"
+        return 0
+    else
+        log_error "Failed to capture screenshot"
+        return 1
+    fi
+}
+
+# Get UI hierarchy XML
+adb_get_screen_xml() {
+    local output_file="$1"
+    local temp_file="/sdcard/window_dump.xml"
+    adb shell uiautomator dump "$temp_file" >/dev/null 2>&1
+    adb pull "$temp_file" "$output_file" >/dev/null 2>&1
+    adb shell rm "$temp_file" 2>/dev/null
+    if [[ -f "$output_file" ]]; then
+        log_info "UI hierarchy saved: $output_file"
+        return 0
+    else
+        log_error "Failed to dump UI hierarchy"
+        return 1
+    fi
+}
+
+# Get screen resolution
+adb_get_screen_size() {
+    adb shell wm size 2>/dev/null | grep -oE "[0-9]+x[0-9]+" | tr 'x' ' '
+}
+
+# Wait for app to be in foreground
+adb_wait_for_app() {
+    local timeout="${1:-10}"
+    local elapsed=0
+    while [[ $elapsed -lt $timeout ]]; do
+        if adb shell dumpsys activity activities 2>/dev/null | grep -q "mResumedActivity.*${QA_APP_PACKAGE}"; then
+            log_info "App is in foreground"
+            return 0
+        fi
+        sleep 1
+        ((elapsed++))
+    done
+    log_error "Timeout waiting for app to be in foreground"
+    return 1
+}
+
+# ─── Compound / Smart Functions ──────────────────────────────────────────────
+# These reduce tool calls by combining observe→act→verify into single commands.
+
+# Internal: temp file for XML dumps (avoids per-call path arguments)
+_ADB_XML_TMP="/tmp/qa-screen-dump.xml"
+
+# Internal: dump fresh UI hierarchy to temp file
+_adb_fresh_xml() {
+    local temp_file="/sdcard/window_dump.xml"
+    adb shell uiautomator dump "$temp_file" >/dev/null 2>&1
+    adb pull "$temp_file" "$_ADB_XML_TMP" >/dev/null 2>&1
+    adb shell rm "$temp_file" 2>/dev/null
+    if [[ ! -f "$_ADB_XML_TMP" ]]; then
+        log_error "Failed to dump UI hierarchy"
+        return 1
+    fi
+}
+
+# Internal: find element center coordinates by text match in XML file
+# Usage: _adb_parse_bounds "Button Text" [xml_file]
+# Output: prints "cx cy" to stdout (e.g., "540 1802")
+# Returns 1 if not found
+_adb_parse_bounds() {
+    local search_text="$1"
+    local xml_file="${2:-$_ADB_XML_TMP}"
+    if [[ ! -f "$xml_file" ]]; then
+        log_error "XML file not found: $xml_file"
+        return 1
+    fi
+    # Split XML nodes onto separate lines, find matching text, extract bounds
+    # Portable: uses sed + awk only (no grep -P)
+    local bounds
+    bounds=$(sed 's/></>\n</g' "$xml_file" \
+        | grep "text=\"${search_text}\"" \
+        | head -1 \
+        | sed 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/')
+    if [[ -z "$bounds" ]]; then
+        # Fallback: try content-desc match
+        bounds=$(sed 's/></>\n</g' "$xml_file" \
+            | grep "content-desc=\"${search_text}\"" \
+            | head -1 \
+            | sed 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/')
+    fi
+    if [[ -z "$bounds" || "$bounds" == *"bounds"* ]]; then
+        log_error "Element not found: '$search_text'"
+        return 1
+    fi
+    # Calculate center from "x1 y1 x2 y2"
+    local x1 y1 x2 y2
+    read -r x1 y1 x2 y2 <<< "$bounds"
+    echo "$(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 ))"
+}
+
+# Tap an element found by its visible text (one call replaces XML dump + parse + tap)
+# Usage: adb_tap_text "Continue with Google" [sleep_after]
+adb_tap_text() {
+    local search_text="$1"
+    local sleep_after="${2:-1}"
+    _adb_fresh_xml || return 1
+    local coords
+    coords=$(_adb_parse_bounds "$search_text") || return 1
+    local cx cy
+    read -r cx cy <<< "$coords"
+    log_info "Tap text '$search_text' at ($cx, $cy)"
+    adb shell input tap "$cx" "$cy"
+    sleep "$sleep_after"
+}
+
+# Wait until specific text appears on screen (polls UI XML)
+# Usage: adb_wait_for_text "Welcome" [timeout_seconds]
+# Returns 0 when found, 1 on timeout
+adb_wait_for_text() {
+    local search_text="$1"
+    local timeout="${2:-10}"
+    local elapsed=0
+    log_info "Waiting for text: '$search_text' (timeout: ${timeout}s)"
+    while [[ $elapsed -lt $timeout ]]; do
+        _adb_fresh_xml 2>/dev/null
+        if _adb_parse_bounds "$search_text" >/dev/null 2>&1; then
+            log_info "Found text: '$search_text' (${elapsed}s)"
+            return 0
+        fi
+        sleep 1
+        ((elapsed++))
+    done
+    log_error "Timeout waiting for text: '$search_text'"
+    return 1
+}
+
+# Tap element by text, then wait for new text to appear (state transition in one call)
+# Usage: adb_tap_and_wait "Next" "You're Ready" [timeout]
+adb_tap_and_wait() {
+    local tap_text="$1"
+    local wait_text="$2"
+    local timeout="${3:-10}"
+    adb_tap_text "$tap_text" 0.5 || return 1
+    adb_wait_for_text "$wait_text" "$timeout"
+}
+
+# Assert that specific text exists on the current screen
+# Usage: adb_assert_text "Content generated by AI" && echo "found"
+# Returns 0 if found, 1 if not
+adb_assert_text() {
+    local search_text="$1"
+    _adb_fresh_xml || return 1
+    if _adb_parse_bounds "$search_text" >/dev/null 2>&1; then
+        log_info "Assert PASS: '$search_text' found"
+        return 0
+    else
+        log_error "Assert FAIL: '$search_text' not found"
+        return 1
+    fi
+}
+
+# List all visible text elements on screen (one per line, for debugging)
+# Usage: adb_list_texts [xml_file]
+adb_list_texts() {
+    local xml_file="${1:-}"
+    if [[ -z "$xml_file" ]]; then
+        _adb_fresh_xml || return 1
+        xml_file="$_ADB_XML_TMP"
+    fi
+    sed 's/></>\n</g' "$xml_file" \
+        | sed -n 's/.*text="\([^"]*\)".*/\1/p' \
+        | grep -v '^$'
+}
+
+# Capture full screen state: screenshot + XML dump in one call
+# Usage: adb_screen_state "/path/to/screenshot.png" ["/path/to/dump.xml"]
+adb_screen_state() {
+    local screenshot_path="$1"
+    local xml_path="${2:-${screenshot_path%.png}.xml}"
+    adb_screenshot "$screenshot_path" || return 1
+    adb_get_screen_xml "$xml_path" || return 1
+    log_info "State captured: $screenshot_path + $xml_path"
+}
