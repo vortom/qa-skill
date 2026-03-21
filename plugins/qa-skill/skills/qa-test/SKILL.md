@@ -131,6 +131,8 @@ Then **all subsequent commands** use `/tmp/qa` directly:
 ```bash
 # Compound functions — prefer these (1 call replaces 3-4 primitive calls):
 /tmp/qa adb_tap_text "Continue with Google"
+/tmp/qa adb_tap_text "Enable Location" 1 2   # tap 2nd match (skip title, hit button)
+/tmp/qa adb_tap_content_desc "Journal"        # for icon-only nav items
 /tmp/qa adb_tap_and_wait "Next" "You're Ready" 10
 /tmp/qa adb_assert_text "Welcome"
 
@@ -176,6 +178,7 @@ Write to `<session>/test-plan.md`. Present plan to user.
    | Instead of (3-4 calls) | Use (1 call) |
    |------------------------|--------------|
    | `adb_get_screen_xml` → parse XML → `adb_tap X Y` | `adb_tap_text "Button Label"` |
+   | XML dump → find content-desc → `adb_tap X Y` | `adb_tap_content_desc "Journal"` |
    | `adb_tap_text` → `sleep` → poll XML | `adb_tap_and_wait "Next" "Ready"` |
    | `adb_screenshot` + `adb_get_screen_xml` | `adb_screen_state "path.png"` |
    | XML dump → grep for text → check result | `adb_assert_text "Expected Text"` |
@@ -196,7 +199,8 @@ Write to `<session>/test-plan.md`. Present plan to user.
 
 | Function | Purpose | Replaces |
 |----------|---------|----------|
-| `adb_tap_text TEXT [SLEEP]` | Find element by text + tap | XML dump + parse + tap |
+| `adb_tap_text TEXT [SLEEP] [INDEX]` | Find element by text + tap (falls back to content-desc). INDEX for disambiguation (1-based, default 1) | XML dump + parse + tap |
+| `adb_tap_content_desc DESC [SLEEP] [INDEX]` | Find element by content-desc + tap. For elements without visible text (e.g., icon-only nav items) | XML dump + parse + tap |
 | `adb_wait_for_text TEXT [TIMEOUT]` | Poll until text appears | Hardcoded `sleep` |
 | `adb_tap_and_wait TAP WAIT [TIMEOUT]` | Tap + wait for transition | tap + sleep + verify |
 | `adb_assert_text TEXT` | Check text on screen (0/1) | XML dump + grep |
