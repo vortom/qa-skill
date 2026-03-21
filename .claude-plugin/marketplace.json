@@ -1,0 +1,17 @@
+{
+  "name": "qa-skill",
+  "owner": {
+    "name": "vortom"
+  },
+  "metadata": {
+    "description": "QA testing plugins for Claude Code"
+  },
+  "plugins": [
+    {
+      "name": "qa-skill",
+      "source": ".",
+      "description": "Generic QA testing — autonomous end-to-end testing on Android, Web, iOS, and desktop platforms",
+      "version": "1.0.0"
+    }
+  ]
+}
