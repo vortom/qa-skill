@@ -44,7 +44,7 @@ This list is not exhaustive — use project docs as the source of truth. If no p
 - Required MCP tools or CLI utilities accessible
 - If the app requires a backend, verify it is accessible (e.g., `curl -sf <backend-url>/api/health`). Check CLAUDE.md for the backend URL.
 
-**Locate skill scripts:** The skill resolves its own script directory at runtime. The runner template (Phase 1) uses `QA_SKILL_DIR` to find `scripts/report.sh` and `scripts/adb.sh`.
+**Locate skill scripts:** The skill uses `${CLAUDE_SKILL_DIR}` — a dynamic variable that Claude Code substitutes with the absolute path to this skill's directory at runtime. The runner template (Phase 1) uses this to find `../../scripts/report.sh` and `../../scripts/adb.sh` (relative to the skill's location within the plugin).
 
 **Android-specific:** `adb.sh` is sourced later (after Phase 1 discovers APP_PACKAGE and APP_ACTIVITY).
 
@@ -82,26 +82,12 @@ Write findings to `<session>/context.md`: project identity, detected platforms w
 
 **All paths in the runner MUST be absolute** — never use relative paths.
 
-**Finding the skill directory:** The runner needs to locate `scripts/report.sh` and `scripts/adb.sh`. Search for these files in order:
-1. `.claude/skills/qa-test/` (standard installed location)
-2. Any path matching `*/qa-skill/` or `*/qa-test/` in the project
-3. Ask the user if not found
+**Finding the skill scripts:** Use `${CLAUDE_SKILL_DIR}` to resolve the scripts directory. This variable is automatically substituted by Claude Code with the absolute path to the skill's directory (`skills/qa-test/`). The helper scripts are at `../../scripts/` relative to the skill.
 
 ```bash
-# Discover skill directory (search common locations)
-QA_SKILL_DIR=""
-for candidate in \
-    "$(pwd)/.claude/skills/qa-test" \
-    "$(pwd)/.claude/skills/qa-skill"; do
-    if [[ -f "$candidate/scripts/report.sh" ]]; then
-        QA_SKILL_DIR="$candidate"
-        break
-    fi
-done
-if [[ -z "$QA_SKILL_DIR" ]]; then
-    echo "ERROR: Cannot find qa-skill scripts. Install to .claude/skills/qa-test/"
-    exit 1
-fi
+# CLAUDE_SKILL_DIR is substituted by Claude Code at runtime
+# It points to the skill's directory (e.g., /path/to/qa-skill/skills/qa-test)
+QA_PLUGIN_DIR="$(dirname "$(dirname "${CLAUDE_SKILL_DIR}")")"
 
 cat > "$SESSION_DIR/qa.sh" << RUNNER
 #!/bin/bash
@@ -110,9 +96,9 @@ export SESSION_DIR="$SESSION_DIR"
 export APP_PACKAGE="<discovered-package>"
 export APP_ACTIVITY="<discovered-activity>"
 export APK_PATH="$(pwd)/android/app/build/outputs/apk/debug/app-debug.apk"
-QA_SKILL_DIR="$QA_SKILL_DIR"
-source "\$QA_SKILL_DIR/scripts/report.sh"
-source "\$QA_SKILL_DIR/scripts/adb.sh"
+QA_PLUGIN_DIR="$QA_PLUGIN_DIR"
+source "\$QA_PLUGIN_DIR/scripts/report.sh"
+source "\$QA_PLUGIN_DIR/scripts/adb.sh"
 "\$@"
 RUNNER
 chmod +x "$SESSION_DIR/qa.sh"

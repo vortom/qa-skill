@@ -1,0 +1,10 @@
+{
+  "name": "qa-skill",
+  "description": "Generic QA testing skill for Claude Code — autonomous end-to-end testing on Android, Web, iOS, and desktop platforms",
+  "version": "1.0.0",
+  "author": {
+    "name": "vortom"
+  },
+  "repository": "https://github.com/vortom/qa-skill",
+  "license": "MIT"
+}

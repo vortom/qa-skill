@@ -1,6 +1,6 @@
 # qa-skill
 
-Generic QA testing skill for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Runs autonomous end-to-end testing on any platform your project supports — Android, Web, iOS, desktop, etc.
+Generic QA testing plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Runs autonomous end-to-end testing on any platform your project supports — Android, Web, iOS, desktop, etc.
 
 ## What it does
 
@@ -15,17 +15,22 @@ It produces JUnit XML reports, screenshots, and a lessons-learned analysis.
 
 ## Install
 
-Copy or symlink this repo into your project's `.claude/skills/` directory:
+### Via Claude Code plugin marketplace (recommended)
 
 ```bash
-# Option 1: Git submodule
-git submodule add https://github.com/vortom/qa-skill.git .claude/skills/qa-test
+# Add the marketplace
+/plugin marketplace add vortom/qa-skill
 
-# Option 2: Clone
+# Install the plugin
+/plugin install qa-test@qa-skill
+```
+
+### Manual installation
+
+Clone or symlink into your project's `.claude/skills/` directory:
+
+```bash
 git clone https://github.com/vortom/qa-skill.git .claude/skills/qa-test
-
-# Option 3: Symlink (if you have it locally)
-ln -s /path/to/qa-skill .claude/skills/qa-test
 ```
 
 ### Permission setup (recommended)
@@ -77,7 +82,7 @@ The skill runs in 5 phases:
 
 ## Android helpers
 
-The skill includes `scripts/adb.sh` with compound functions that reduce tool calls from 3-4 to 1:
+The plugin includes `scripts/adb.sh` with compound functions that reduce tool calls from 3-4 to 1:
 
 | Function | Purpose |
 |----------|---------|
@@ -90,14 +95,18 @@ The skill includes `scripts/adb.sh` with compound functions that reduce tool cal
 
 Plus primitives: `adb_tap`, `adb_swipe`, `adb_input_text`, `adb_press_back`, `adb_screenshot`, etc.
 
-## Project structure
+## Plugin structure
 
 ```
 qa-skill/
-├── SKILL.md           # Skill definition (Claude Code reads this)
+├── .claude-plugin/
+│   └── plugin.json        # Plugin manifest
+├── skills/
+│   └── qa-test/
+│       └── SKILL.md       # Skill definition
 ├── scripts/
-│   ├── adb.sh         # Android platform helpers
-│   └── report.sh      # JUnit XML report generation
+│   ├── adb.sh             # Android platform helpers
+│   └── report.sh          # JUnit XML report generation
 ├── README.md
 └── LICENSE
 ```
