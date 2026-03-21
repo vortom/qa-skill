@@ -95,18 +95,22 @@ The plugin includes `scripts/adb.sh` with compound functions that reduce tool ca
 
 Plus primitives: `adb_tap`, `adb_swipe`, `adb_input_text`, `adb_press_back`, `adb_screenshot`, etc.
 
-## Plugin structure
+## Repository structure
 
 ```
 qa-skill/
 ├── .claude-plugin/
-│   └── plugin.json        # Plugin manifest
-├── skills/
-│   └── qa-test/
-│       └── SKILL.md       # Skill definition
-├── scripts/
-│   ├── adb.sh             # Android platform helpers
-│   └── report.sh          # JUnit XML report generation
+│   └── marketplace.json       # Marketplace catalog
+├── plugins/
+│   └── qa-skill/
+│       ├── .claude-plugin/
+│       │   └── plugin.json    # Plugin manifest
+│       ├── skills/
+│       │   └── qa-test/
+│       │       └── SKILL.md   # Skill definition
+│       └── scripts/
+│           ├── adb.sh         # Android platform helpers
+│           └── report.sh      # JUnit XML report generation
 ├── README.md
 └── LICENSE
 ```

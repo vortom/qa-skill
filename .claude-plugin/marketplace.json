@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "qa-skill",
-      "source": ".",
+      "source": "./plugins/qa-skill",
       "description": "Generic QA testing — autonomous end-to-end testing on Android, Web, iOS, and desktop platforms",
       "version": "1.0.0"
     }
