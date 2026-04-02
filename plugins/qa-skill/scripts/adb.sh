@@ -19,8 +19,12 @@
 #   adb_wait_for_text TEXT [TIMEOUT]       — Poll XML until text appears
 #   adb_tap_and_wait TAP WAIT [TIMEOUT]    — Tap by text, wait for new text
 #   adb_assert_text TEXT                   — Check text exists on screen (0/1)
+#   adb_assert_no_text TEXT                — Check text does NOT exist on screen (0/1)
 #   adb_list_texts [XML]                   — List all visible text elements
 #   adb_screen_state SCREENSHOT [XML]      — Screenshot + XML dump in one call
+#   adb_scroll_to_text TEXT [MAX] [DIR]    — Scroll until text found on screen
+#   adb_toggle_airplane_mode STATE         — Toggle airplane mode on/off
+#   adb_long_press X Y [DURATION]          — Long press at coordinates
 
 # Validate required environment variables
 if [[ -z "${APP_PACKAGE:-}" ]]; then
@@ -414,4 +418,106 @@ adb_screen_state() {
     adb_screenshot "$screenshot_path" || return 1
     adb_get_screen_xml "$xml_path" || return 1
     log_info "State captured: $screenshot_path + $xml_path"
+}
+
+# ─── Additional Compound Functions ───────────────────────────────────────────
+
+# Assert that specific text does NOT exist on the current screen (inverse of adb_assert_text)
+# Usage: adb_assert_no_text "Error message" && echo "good, no error"
+# Returns 0 if NOT found (pass), 1 if found (fail)
+adb_assert_no_text() {
+    local search_text="$1"
+    _adb_fresh_xml || return 1
+    if _adb_parse_bounds "$search_text" >/dev/null 2>&1; then
+        log_error "Assert FAIL: '$search_text' found (unexpected)"
+        return 1
+    else
+        log_info "Assert PASS: '$search_text' not found (expected)"
+        return 0
+    fi
+}
+
+# Scroll until specific text appears on screen
+# Usage: adb_scroll_to_text "Sign Out" [max_scrolls] [direction]
+# direction: "down" (default) or "up"
+# Returns 0 when found, 1 if not found after max scrolls
+adb_scroll_to_text() {
+    local search_text="$1"
+    local max_scrolls="${2:-5}"
+    local direction="${3:-down}"
+    local scroll_count=0
+
+    log_info "Scrolling $direction to find: '$search_text' (max: $max_scrolls)"
+
+    # Check if already visible
+    _adb_fresh_xml 2>/dev/null
+    if _adb_parse_bounds "$search_text" >/dev/null 2>&1; then
+        log_info "Already visible: '$search_text'"
+        return 0
+    fi
+
+    # Get screen dimensions for scroll gesture
+    local screen_size
+    screen_size=$(adb_get_screen_size)
+    local screen_w screen_h
+    read -r screen_w screen_h <<< "$screen_size"
+    local center_x=$(( screen_w / 2 ))
+    local start_y end_y
+
+    if [[ "$direction" == "down" ]]; then
+        start_y=$(( screen_h * 75 / 100 ))
+        end_y=$(( screen_h * 25 / 100 ))
+    else
+        start_y=$(( screen_h * 25 / 100 ))
+        end_y=$(( screen_h * 75 / 100 ))
+    fi
+
+    while [[ $scroll_count -lt $max_scrolls ]]; do
+        adb shell input swipe "$center_x" "$start_y" "$center_x" "$end_y" 300
+        sleep 0.5
+        ((scroll_count++))
+
+        _adb_fresh_xml 2>/dev/null
+        if _adb_parse_bounds "$search_text" >/dev/null 2>&1; then
+            log_info "Found '$search_text' after $scroll_count scroll(s)"
+            return 0
+        fi
+    done
+
+    log_error "Text '$search_text' not found after $max_scrolls scrolls"
+    return 1
+}
+
+# Toggle airplane mode on or off
+# Usage: adb_toggle_airplane_mode "on"   — enable airplane mode
+#        adb_toggle_airplane_mode "off"  — disable airplane mode
+# Note: Always restore "off" at end of test session — state persists across app restarts
+adb_toggle_airplane_mode() {
+    local state="$1"
+    if [[ "$state" == "on" ]]; then
+        adb shell settings put global airplane_mode_on 1
+        adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1
+        sleep 1
+        log_info "Airplane mode ON"
+    elif [[ "$state" == "off" ]]; then
+        adb shell settings put global airplane_mode_on 0
+        adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false >/dev/null 2>&1
+        sleep 2
+        log_info "Airplane mode OFF"
+    else
+        log_error "Invalid state: '$state' (use 'on' or 'off')"
+        return 1
+    fi
+}
+
+# Long press at screen coordinates (implemented as zero-distance swipe)
+# Usage: adb_long_press 540 1200 [duration_ms]
+# Default duration: 1000ms (1 second)
+adb_long_press() {
+    local x="$1"
+    local y="$2"
+    local duration="${3:-1000}"
+    log_info "Long press at ($x, $y) for ${duration}ms"
+    adb shell input swipe "$x" "$y" "$x" "$y" "$duration"
+    sleep 0.5
 }
