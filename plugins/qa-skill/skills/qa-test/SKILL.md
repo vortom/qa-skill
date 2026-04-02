@@ -204,8 +204,12 @@ Write to `<session>/test-plan.md`. Present plan to user.
 | `adb_wait_for_text TEXT [TIMEOUT]` | Poll until text appears | Hardcoded `sleep` |
 | `adb_tap_and_wait TAP WAIT [TIMEOUT]` | Tap + wait for transition | tap + sleep + verify |
 | `adb_assert_text TEXT` | Check text on screen (0/1) | XML dump + grep |
+| `adb_assert_no_text TEXT` | Check text NOT on screen (0/1) | XML dump + grep + invert |
 | `adb_list_texts [XML]` | List all visible texts | XML dump + sed pipeline |
 | `adb_screen_state SHOT [XML]` | Screenshot + XML in one call | screenshot + XML dump |
+| `adb_scroll_to_text TEXT [MAX] [DIR]` | Scroll until text found | Manual swipe + XML dump loop |
+| `adb_toggle_airplane_mode STATE` | Toggle airplane mode on/off | Manual adb shell commands |
+| `adb_long_press X Y [DUR]` | Long press at coordinates | Zero-distance swipe hack |
 | `adb_tap X Y` | Tap coordinates (primitive) | — |
 | `adb_swipe X1 Y1 X2 Y2 [DUR]` | Swipe gesture (primitive) | — |
 
@@ -247,6 +251,8 @@ Dispatch each scenario to the right execution approach based on its `platform` t
 | Unexpected dialog/modal/popup | Dismiss it, retry original action once |
 
 **Circuit breaker:** If 3 consecutive scenarios end in ERROR (crash/unrecoverable), abort remaining scenarios and proceed directly to Phase 4 with partial results.
+
+**Airplane mode cleanup:** After any test that uses `adb_toggle_airplane_mode on`, ensure `adb_toggle_airplane_mode off` is called in cleanup — even if the test fails. Network-disabled state persists across app restarts and affects all subsequent tests.
 
 ### Exploratory Observations
 
