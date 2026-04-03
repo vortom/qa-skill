@@ -14,7 +14,7 @@
 #   adb_screenshot, adb_get_screen_xml, adb_get_screen_size
 #
 # Compound functions (prefer these — each replaces 2-4 primitive calls):
-#   adb_tap_text TEXT [SLEEP] [INDEX]      — XML dump → find element → tap center (falls back to content-desc)
+#   adb_tap_text TEXT [SLEEP] [INDEX]      — XML dump → find element → tap center (falls back to content-desc, then clickable parent)
 #   adb_tap_content_desc DESC [SLEEP] [INDEX] — XML dump → find by content-desc → tap center
 #   adb_wait_for_text TEXT [TIMEOUT]       — Poll XML until text appears
 #   adb_tap_and_wait TAP WAIT [TIMEOUT]    — Tap by text, wait for new text
@@ -290,6 +290,25 @@ _adb_parse_bounds() {
     # Calculate center from "x1 y1 x2 y2"
     local x1 y1 x2 y2
     read -r x1 y1 x2 y2 <<< "$bounds"
+
+    # Detect zero bounds (Compose layout quirk: child Text can have [0,0][0,0] while parent is real)
+    if [[ "$x1" -eq 0 && "$y1" -eq 0 && "$x2" -eq 0 && "$y2" -eq 0 ]]; then
+        log_warn "Element '$search_text' has zero bounds, looking up clickable parent..."
+        local parent_bounds
+        parent_bounds=$(sed 's/></>\n</g' "$xml_file" \
+            | grep -B10 "text=\"${search_text}\"" \
+            | grep 'clickable="true"' \
+            | tail -1 \
+            | sed 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/')
+        if [[ -n "$parent_bounds" && "$parent_bounds" != "0 0 0 0" ]]; then
+            read -r x1 y1 x2 y2 <<< "$parent_bounds"
+            log_info "Using clickable parent bounds: [$x1,$y1][$x2,$y2]"
+        else
+            log_error "Element '$search_text' and all parents have zero bounds — cannot determine position"
+            return 1
+        fi
+    fi
+
     echo "$(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 ))"
 }
 
@@ -330,6 +349,10 @@ adb_tap_text() {
     coords=$(_adb_parse_bounds "$search_text" "$_ADB_XML_TMP" "$index") || return 1
     local cx cy
     read -r cx cy <<< "$coords"
+    if [[ "$cx" -eq 0 && "$cy" -eq 0 ]]; then
+        log_error "Tap aborted: resolved coordinates are (0, 0) for '$search_text'"
+        return 1
+    fi
     log_info "Tap text '$search_text' at ($cx, $cy)"
     adb shell input tap "$cx" "$cy"
     sleep "$sleep_after"
@@ -346,6 +369,10 @@ adb_tap_content_desc() {
     coords=$(_adb_parse_bounds_desc "$search_desc" "$_ADB_XML_TMP" "$index") || return 1
     local cx cy
     read -r cx cy <<< "$coords"
+    if [[ "$cx" -eq 0 && "$cy" -eq 0 ]]; then
+        log_error "Tap aborted: resolved coordinates are (0, 0) for content-desc '$search_desc'"
+        return 1
+    fi
     log_info "Tap content-desc '$search_desc' at ($cx, $cy)"
     adb shell input tap "$cx" "$cy"
     sleep "$sleep_after"
@@ -492,18 +519,32 @@ adb_scroll_to_text() {
 # Usage: adb_toggle_airplane_mode "on"   — enable airplane mode
 #        adb_toggle_airplane_mode "off"  — disable airplane mode
 # Note: Always restore "off" at end of test session — state persists across app restarts
+# Note: On non-rooted Samsung Android 12+ devices, the broadcast may fail (SecurityException).
+#       Falls back to svc wifi/data disable, but warns about potential ADB disruption.
 adb_toggle_airplane_mode() {
     local state="$1"
     if [[ "$state" == "on" ]]; then
         adb shell settings put global airplane_mode_on 1
-        adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1
-        sleep 1
-        log_info "Airplane mode ON"
+        if adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true 2>&1 | grep -q "SecurityException"; then
+            log_warn "Airplane mode broadcast denied (device may require root)"
+            log_warn "Falling back to svc wifi/data disable — ADB over WiFi may disconnect"
+            adb shell svc wifi disable 2>/dev/null
+            adb shell svc data disable 2>/dev/null
+            sleep 2
+            log_info "Network disabled via svc (WiFi + data off)"
+        else
+            sleep 1
+            log_info "Airplane mode ON"
+        fi
     elif [[ "$state" == "off" ]]; then
         adb shell settings put global airplane_mode_on 0
-        adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false >/dev/null 2>&1
+        if adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false 2>&1 | grep -q "SecurityException"; then
+            log_warn "Airplane mode broadcast denied, re-enabling via svc..."
+            adb shell svc wifi enable 2>/dev/null
+            adb shell svc data enable 2>/dev/null
+        fi
         sleep 2
-        log_info "Airplane mode OFF"
+        log_info "Airplane mode OFF / Network restored"
     else
         log_error "Invalid state: '$state' (use 'on' or 'off')"
         return 1

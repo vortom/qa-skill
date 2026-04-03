@@ -227,6 +227,9 @@ Dispatch each scenario to the right execution approach based on its `platform` t
 **Android** (uses `adb.sh` helpers):
 - **Prefer compound functions:** Use `adb_tap_text` over manual XML→parse→tap. Use `adb_wait_for_text` over hardcoded `sleep`. Use `adb_tap_and_wait` for screen transitions.
 - **XML-first interaction (mandatory):** All compound functions use XML internally. Only fall back to manual `adb_get_screen_xml` + `adb_tap X Y` when elements lack unique text (use coordinates).
+- **Zero-bounds elements:** Some frameworks (e.g., Jetpack Compose) report `bounds="[0,0][0,0]"` for child Text elements while the parent clickable View has real bounds. `adb_tap_text` automatically detects this and falls back to the nearest clickable parent. If fallback also fails, use `adb_tap X Y` with coordinates from the parent element in the XML dump.
+- **Drag-and-drop limitations:** Compose `detectDragGestures` does not respond reliably to `adb shell input swipe`. For sorting/reorder interactions, prefer exhausting attempts (trial-and-error) or skip and document as "unsupported automation." This is a framework limitation, not an app defect.
+- **Airplane mode on non-rooted devices:** `adb_toggle_airplane_mode` falls back to `svc wifi/data disable` if the broadcast is denied (common on Samsung Android 12+). This may disrupt ADB connections over WiFi. Test manually via Quick Settings if the fallback causes issues.
 - Primitive actions (when compound won't work): `adb_tap`, `adb_swipe`, `adb_input_text`, `adb_press_back`
 - Crash detection: `pidof` returns empty → capture `adb logcat -d -t 50`
 - Recovery: `adb_launch_app` to restart after crash
@@ -249,6 +252,8 @@ Dispatch each scenario to the right execution approach based on its `platform` t
 | App/page crashes | Capture logs/errors, record ERROR, restart app/page, continue next scenario |
 | Device/browser disconnects | Abort, `report_finish`, save partial report |
 | Unexpected dialog/modal/popup | Dismiss it, retry original action once |
+| Element has zero bounds (0,0) | `adb_tap_text` auto-falls back to clickable parent; if that fails, find parent in XML dump and tap by coordinates |
+| Airplane mode broadcast denied | `adb_toggle_airplane_mode` falls back to `svc wifi/data disable`; if ADB disconnects, test manually via Quick Settings |
 
 **Circuit breaker:** If 3 consecutive scenarios end in ERROR (crash/unrecoverable), abort remaining scenarios and proceed directly to Phase 4 with partial results.
 
