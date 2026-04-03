@@ -33,9 +33,14 @@ Clone or symlink into your project's `.claude/skills/` directory:
 git clone https://github.com/vortom/qa-skill.git .claude/skills/qa-test
 ```
 
-### Permission setup (recommended)
+### Permissions
 
-Add to `.claude/settings.local.json` to auto-approve QA runner commands:
+The skill declares `allowed-tools` in its frontmatter, which auto-approves QA runner commands (`/tmp/qa`), ADB calls, health checks, and file operations during skill execution. **No manual permission configuration is needed.**
+
+<details>
+<summary>Fallback: manual permission setup</summary>
+
+If `allowed-tools` is not supported in your environment, add to `.claude/settings.local.json`:
 
 ```json
 {
@@ -47,7 +52,8 @@ Add to `.claude/settings.local.json` to auto-approve QA runner commands:
 }
 ```
 
-This avoids repetitive permission prompts during test execution. The `/tmp/qa` symlink only exists during active QA sessions.
+This auto-approves runner commands. The `/tmp/qa` symlink only exists during active QA sessions.
+</details>
 
 ## Usage
 
