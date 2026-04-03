@@ -3,6 +3,7 @@ name: qa-test
 description: Use when you need to run end-to-end QA testing on any platform the project supports — Android, Web, iOS, desktop, etc. Detects platforms from project structure and docs, then uses the appropriate testing tools. Supports PR review, manual test cases, and exploratory testing.
 argument-hint: "[--pr N] [--cases path] [description]"
 disable-model-invocation: false
+allowed-tools: Bash(/tmp/qa *), Bash(adb *), Bash(curl *), Read, Write
 ---
 
 # QA Test Skill
@@ -51,11 +52,9 @@ This list is not exhaustive — use project docs as the source of truth. If no p
 
 **Android-specific:** `adb.sh` is sourced later (after Phase 1 discovers APP_PACKAGE and APP_ACTIVITY).
 
-**Permission allowlisting (recommended):** QA sessions make many Bash calls via the `/tmp/qa` runner. To avoid repetitive permission prompts, add this pattern to `.claude/settings.local.json` under `permissions.allow`:
-```json
-"Bash(/tmp/qa *)"
-```
-This auto-approves all runner commands (every QA command starts with `/tmp/qa`) while keeping other Bash calls gated. The `/tmp/qa` symlink only exists during active QA sessions.
+**Permission handling:** This skill declares `allowed-tools` in its frontmatter, which auto-approves `/tmp/qa` runner commands, `adb` calls, `curl` health checks, and file read/write operations during skill execution. No manual permission configuration is needed.
+
+> **Fallback:** If `allowed-tools` is not supported in your environment, add `"Bash(/tmp/qa *)"` to `.claude/settings.local.json` under `permissions.allow` to auto-approve runner commands manually.
 
 ## Phase 1: DISCOVER
 
@@ -171,7 +170,7 @@ Write to `<session>/test-plan.md`. Present plan to user.
 
 ### Tool Call Economy
 
-**Each Bash tool call costs a user permission prompt.** Minimize calls by:
+**Each Bash tool call has overhead.** Even with `allowed-tools` auto-approval, minimize calls for efficiency:
 
 1. **Use compound functions** instead of primitives (1 call replaces 3-4):
 
